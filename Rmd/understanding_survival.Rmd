@@ -1,0 +1,295 @@
+---
+title: "Understanding the `survival` Package"
+author: "Giovanni d'Ario"
+date: "2025-04-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The survival package is extremely powerful, but also rather complex, and not very intuitive. The documentation is also not easy to navigate. It contains classes and methods that do a lot of stuff, and it's sometimes difficult to understand what a method is doing, or what a component of an object corresponds to.
+
+```{r}
+library(survival)
+dset <- read.csv("../data/Practical_Rott_dev.csv", header = TRUE) |>
+  dplyr::mutate(
+    size = factor(size),
+    grade = factor(grade)
+  )
+
+dplyr::glimpse(dset)
+```
+## Basic Non-Parametric Estimators
+
+### Creating a survival object with `Surv()`
+
+The function `Surv()` creates a survival object. In this document we will only consider right-censoring.
+
+### Fitting survival curves with `survfit()`
+
+The generic function `survfit()` creates survival curves from either a formula (`survfit.formula`), as is the case below, or from a fitted Cox model (`survfit.coxph`), covered in the next section. It can also take an accelerated failure time model, but we will not cover this case here.
+
+The object produced by the `survfit()` generic function is a `survfit` object which has class `survfit`. To see the documentation associated with this object, one cannot type `help(survfit)` as this would show the documentation for the generic function, but rather `help(survfit.object)`. The documentation of `survfit.formula` says that the function
+
+> Computes an estimate of a survival curve for censored data using the Aalen-Johansen estimator. For ordinary (single event) survival this reduces to the Kaplan-Meier estimate.
+
+In terms of output, the documentation expains that
+
+> The routine returns both an estimated probability in state and an estimated cumulative hazard estimate. For simple survival the probability in state = probability alive, i.e, the estimated survival.
+
+If we look at the components of a `survfit` object, we have
+
+```{r}
+sdata <- Surv(dset$rfsurv / 12, dset$rfsi) 
+km_fit <- survfit(sdata ~ 1)
+names(km_fit)
+```
+
+We see that the `survfit` object contains:
+
+- `n`: the total number of observations.
+- `time`: the unique time points.
+- `n.risk`: the number of individuals at risk at each time point.
+- `n.event`: the number of events at each time point.
+- `n.censor`: the number of censored individuals at each time point.
+- `surv`: a vector of $n_t$ elements, where $n_t$ is the number of unique time-points, i.e., the length of the `$time` component. Note that $t_0 = 0$ is not included in `$time` and `$surv`. Between $t_0$ and $t_1$ the survival function has value 1.
+- `cumhaz`: Vector similar to `$surv`, but containing the values of the cumulative hazard function
+
+There are several additional elements, including those that allow plotting the confidence intervals of the survival and of the cumulative hazard functions, respectively. The `km_fit` object, therefore, contains all the element necessary to estimate the survival function, the cumulative hazard function, the corresponding standard errors, and a few more pieces of information.
+
+The code snippet below shows the methods associated with the `survfit` object. Note the `median()` and the `quantile()` functions.
+
+```{r}
+class(km_fit)
+methods(class = class(km_fit))
+```
+
+Typically we are primarily interested in the `median`, `plot`, `print`, `summary` methods.
+
+```{r}
+median(km_fit)
+quantile(km_fit, c(0.25, 0.50, 0.75), conf.int = FALSE)
+```
+
+Looking at the help page for `plot.survfit()` we see that there is a `cumhaz` argument, which is `FALSE` by default. Let's see how this changes what is plotted by the plot method.
+
+```{r}
+plot(km_fit)
+```
+
+```{r}
+plot(km_fit, cumhaz = TRUE)
+```
+Setting `cumhaz = TRUE` plots the cumulative hazard instead of the survival function.
+
+The `print.survfit()` method has two useful arguments: `scale` and `rmean`. The first, `scale` allows to print time in units different than the original ones. For example, we defined `sdata` such that time is expressed in years. Let's print the results in weeks (52 weeks in an year). If time was expressed in days and we wanted it expressed in years, we should write `scale = 365`. In our case we must *divide* by 52.
+
+```{r}
+print(km_fit)
+print(km_fit, scale = 1/52)
+```
+
+The other useful argument is `rmean`. This computes the Restricted Mean Survival Time (RMST), which is an estimate of the expected survival time within a given time window. In the example below we print the RMST at 2 and 5 years.
+
+```{r}
+print(km_fit, rmean = 2)
+print(km_fit, rmean = 5)
+```
+
+
+There seems to be no method to compute the hazard function associated with a `survfit` object. The Kaplan-Meier estimate of the hazard function is
+
+$$\hat h(t) = \frac{d_j}{n_j \tau_j}$$
+
+where $\tau_j = t_(j+1) - t(j)$. We can write a small function that computes this K-M estimator.
+
+```{r}
+km_hazard <- function(x) {
+  res <- data.frame(
+    t1 = c(0, x$time),
+    n = c(x$n, x$n.risk),
+    d = c(0, x$n.event),
+    c = c(0, x$n.censor)
+  )
+  res <- res[res$c == 0, ]
+  res$t2 <- c(res$t1[-1], max(x$time))
+  res$tau <- res$t2 - res$t1
+  res$haz <- res$d / (res$n * res$tau)
+  res
+}
+
+plot_km_hazard <- function(x) {
+  tmp <- km_hazard(x)
+  plot(tmp$t1 , tmp$haz, type = "s", xlab = "Time", ylab = "Hazard")
+}
+```
+
+We consider the small dataset from example 1.1 in Collett's book, to verify that we obtain the same results and the same plot.
+
+```{r}
+ex1.1 <- data.frame(
+  time = c(10, 13, 18, 19, 23, 30, 36, 38, 54, 56, 59, 75,
+            93, 97, 104, 107, 107, 107),
+  status = c(1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0)
+)
+tmp <- survfit(Surv(ex1.1$time, ex1.1$status) ~ 1)
+```
+
+```{r}
+km_hazard(tmp)
+```
+
+```{r}
+plot_km_hazard(tmp)
+```
+
+
+The "manual" version of the hazard function looks very wiggly, with extreme peaks and an unrealistic amount of variability.
+
+```{r}
+plot_km_hazard(km_fit)
+```
+
+The `muhaz` package provides a smooth estimate of the hazard function for censored data. There are several choices for the smoothing parameters. The plot below uses the default settings.
+
+```{r}
+plot(muhaz::muhaz(dset$rfsurv / 12, dset$rfsi))
+```
+
+## Cox Proportional Hazards Method
+
+We now fit a Cox proportional hazard model to this dataset. For simplicity, we will consider only two predictors, `age` and `nodes`
+
+```{r}
+fit <- coxph(sdata ~ age + nodes, data = dset)
+summary(fit)
+```
+The `summary()` function returns several pieces of information. At the bottom we see information about `Concordance` and three tests: likelihood ratio, Wald, and score test.
+
+For the likelihood ratio test, let's fit a model that only contains an intercept
+
+```{r}
+cox_null <- coxph(sdata ~ 1)
+cox_null
+```
+
+If we look at the `$loglik$ components of the null and of the non-null model, we see that the latter contains the log likelihood of the former.
+
+```{r}
+cox_null$loglik
+fit$loglik
+```
+
+```{r}
+diff(fit$loglik)
+2 * diff(fit$loglik)
+```
+
+This last number is identical to the `$logtest` component of `summary(fit)`.
+
+```{r}
+names(summary(fit))
+summary(fit)$logtest
+```
+
+**TODO** describe the other tests.
+
+## The `coxph.object`
+
+Similar to `survfit.object`, the output of `coxph` is a `coxph.object`. There are several interesting quantities.
+
+### Concordance
+
+The `$concordance` component is a vector of 6 elements containing
+
+1. The number of concordant pairs.
+2. The number of discordant pairs.
+3. The number of pairs tied on x.
+4. The number of pairs tied on y.
+5. The number of pairs tied on both.
+6. The concordance statistic.
+
+```{r}
+fit$concordance
+```
+
+### Linear Predictors
+
+The `fit$linear.predictors` component contains the vector of *centered* linear predictors. Let's compare the values below:
+
+```{r}
+fit$linear.predictors[1:10]
+```
+
+with those obtained from manually extracting the linear predictor:
+
+```{r}
+(model.matrix(fit) %*% fit$coefficients)[1:10]
+```
+
+These values are quite different. Let's see what happens if we center the model.matrix.
+
+```{r}
+(scale(model.matrix(fit), center = TRUE, scale = FALSE) %*% fit$coefficients)[1:10]
+```
+
+We obtain exactly the content of `fit$linear.predictor`.
+
+## Making Predictions
+
+The `predict.coxph()` method takes a `coxph` object and, optionally, a `newdata` data frame. The `type` argument specifies the type of predicted value. Choices are:
+
+1. `lp`: the linear predictor.
+2. `risk`: the risk score, which is equal to `exp(lp)`.
+3. `expected`: the expected number of events given the covariates and follow-up time.
+4. `terms`: the terms of the linear predictor. **TODO** clarify.
+5. `survival`: the survival probability, which can also be obtained as `exp(-expected)`. **TODO** clarify: survival at what time?
+
+### `lp`
+
+If we set `type = "lp"` we obtain once again the *centered* linear predictors.
+
+```{r}
+predict(fit, type = "lp")[1:10]
+```
+
+### Survival probability
+
+**TODO** what's this? Clarify.
+
+```{r}
+exp(-predict(fit, type = "expected"))[1:10]
+```
+
+## Predictions with `survfit.coxph`
+
+We don't need to explicity compute the baseline hazard in order to estimate the survival probability for a given set of predictors at a given set of time points. Passing a Cox model and, optionally, a `newdata` data frame to `survfit`, we obtain a survival curve for each row of the data frame. For example:
+
+```{r}
+sfit <- survfit(fit, newdata = data.frame(age = c(23, 54), nodes = c(0, 5)))
+names(sfit)
+```
+
+```{r}
+plot(sfit, col = c("green", "red"),
+     xlab = "Time (years)",
+     ylab = "Survival probability")
+```
+This object allows to extract the estimated survival probability at any time via the `summary.survfit()` method.
+
+```{r}
+summary(sfit[1], times = c(5, 10))
+```
+
+### Estimating the baseline hazard
+
+The `basehaz()` function takes a fitted Cox model, a data frame of `newdata`, and an optional parameter `centered` which is `TRUE` by default. This argument is ignored if `newdata` is present. If `FALSE` it returns the baseline hazard for all covariates set to zero, otherwise it uses `fit$mean` to center the covariates. It is just an alias for `survfit.coxph()`, which has a richer set of options, so one can always use it for the same purpose.
+
+```{r}
+basehaz
+```
+
