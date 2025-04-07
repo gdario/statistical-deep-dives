@@ -127,6 +127,19 @@ Note that you can pass `summary.survfit()` a vector of `times` to obtain informa
 summary(km_fit, times = c(2, 5))
 ```
 
+We can extract the components of the summary for the time points of interest.
+
+```{r}
+summary(km_fit, times = c(2, 5))$surv
+summary(km_fit, times = c(2, 5))$cumhaz
+```
+
+If we want to extract several components, e.g., survival and/or cumulative hazard and their standard error, we can use the `data.frame=TRUE` argument.
+
+```{r}
+summary(km_fit, data.frame = TRUE, times = c(2, 5))
+```
+
 Note that
 
 > When the ‘times’ argument contains values not in the data, the routine can only use a best guess for the number at risk, i.e., the number at risk at the next event/censoring time.
@@ -135,7 +148,9 @@ Note that
 
 There seems to be no method to compute the hazard function associated with a `survfit` object. The Kaplan-Meier estimate of the hazard function is
 
-$$\hat h(t) = \frac{d_j}{n_j \tau_j}$$
+$$
+\hat h(t) = \frac{d_j}{n_j \tau_j}
+$$
 
 where $\tau_j = t_(j+1) - t(j)$. We can write a small function that computes this K-M estimator.
 
@@ -179,13 +194,15 @@ km_hazard(tmp)
 plot_km_hazard(tmp)
 ```
 
-The "manual" version of the hazard function looks very wiggly, with extreme peaks and an unrealistic amount of variability.
+These are the same table and the same plot in Collett's book, which makes us confident that the function is not too far from being correct.
+
+When applied to our dataset, the "manual" version of the hazard function looks very wiggly, with extreme peaks and an unrealistic amount of variability.
 
 ```{r}
 plot_km_hazard(km_fit)
 ```
 
-The `muhaz` package provides a smooth estimate of the hazard function for censored data. There are several choices for the smoothing parameters. The plot below uses the default settings.
+The `muhaz` package provides a smooth estimate of the hazard function for censored data. There are several choices for the smoothing parameters. The plot below uses the default settings. Note the different range of the y-axis in the two plots.
 
 ```{r}
 plot(muhaz::muhaz(dset$rfsurv / 12, dset$rfsi))
@@ -193,7 +210,7 @@ plot(muhaz::muhaz(dset$rfsurv / 12, dset$rfsi))
 
 ## Cox Proportional Hazards Method
 
-We now fit a Cox proportional hazard model to this dataset. For simplicity, we will consider only two predictors, `age` and `nodes`. We will make no effort to optimize this model, which is used only for illustration purposes. The `print.coxph()` method provides a concise summary of the fit.
+We will now fit a Cox proportional hazard model to this dataset. For simplicity, we will consider only two predictors, `age` and `nodes`. We will make no effort to optimize this model, which is used only for illustration purposes. The `print.coxph()` method provides a concise summary of the fit.
 
 ```{r}
 fit <- coxph(sdata ~ age + nodes, data = dset)
@@ -218,16 +235,13 @@ According to the documentation `fit$loglik` is
 
 The initial values are set to zero by default, as explained in the documentation for `coxph()`, and specifically for the `init` argument.
 
-```{r}
-cox_null <- coxph(sdata ~ 1)
-cox_null$loglik
-```
-
-The second one difference and multiply by two, we get exactly the value of the likelihood ratio test. Rather strangely, there seems to be no slot in the `survfit.object` containing the value of the likelihood ratio test.
+If we take the difference of the first value and the second, and multiply by negative two, we get exactly the value of the likelihood ratio test.
 
 ```{r}
 -2 * (fit$loglik[1] - fit$loglik[2])
 ```
+
+Rather strangely, there seems to be no slot in the `survfit.object` containing the value of the likelihood ratio test.
 
 To gain an insight of how the likelihood ratio test is computed, we can look at the source code of `survival:::print.coxph()`. The snippet below is extracted from it, and we can see that both the test value and the associated p-value are computed on the fly, and not stored in a component of the output list.
 
@@ -240,9 +254,9 @@ cat("Likelihood ratio test=", format(round(logtest, 2)),
     sep = "")
 ```
 
-The values of `fit$wald.test` and `fit$score` is also based on the comparison of the initial and final values.
+The values of `fit$wald.test` and `fit$score` are also based on the comparison of the initial and final values.
 
-The `summary()` function some more information about these tests. One can, for example, compare the following
+The `summary()` function contains some information related to these tests. One can, for example, compare the following
 
 ```{r}
 fit$wald.test
@@ -306,13 +320,15 @@ moreover the documentation explains that
 
 > The Cox model is a relative risk model; predictions of type "linear predictor", "risk", and "terms" are all relative to the sample from which they came. By default, the reference value for each of these is the mean covariate within strata.
 
-method takes a `coxph` object and, optionally, a `newdata` data frame. The `type` argument specifies the type of predicted value. Choices are:
+The `predict.coxph` method takes a `coxph` object and, optionally, a `newdata` data frame. The `type` argument specifies the type of predicted value. Possible choices are:
 
 1. `lp`: the linear predictor.
 2. `risk`: the risk score, which is equal to `exp(lp)`.
 3. `expected`: the expected number of events given the covariates and follow-up time.
 4. `terms`: the terms of the linear predictor. **TODO** clarify.
-5. `survival`: the survival probability, which can also be obtained as `exp(-expected)`. **TODO** clarify: survival at what time?
+5. `survival`: the survival probability, which can also be obtained as `exp(-expected)`.
+
+Let's take a closer look at some of these.
 
 ### `lp`
 
@@ -323,6 +339,8 @@ predict(fit, type = "lp")[1:10]
 ```
 
 ### `risk`
+
+As we said, these should correspond to `exp(lp)`, where `lp` is the linear predictor.
 
 ```{r}
 all.equal(
@@ -360,16 +378,18 @@ According to the documentation, `survfit.coxph`
 
 ### Do we need to compute the baseline hazard?
 
-It is important to note that we don't need to explicitly compute the baseline hazard in order to estimate the survival probability for a given set of predictors at a given set of time points. The output depends on whether we pass a `newdata` argument or not. According to the documentation
+It is important to note that, if we want to estimate the survival probability for a given set of predictors at a given set of time points, we don't need to explicitly compute the baseline hazard. The output depends on whether we pass a `newdata` argument or not. According to the documentation
 
 > If the newdata argument is missing, then a curve is produced for a single "pseudo" subject with covariate values equal to the means component of the fit. The resulting curve(s) rarely make scientific sense, but the default remains due to an unwarranted belief by many that it represents an "average" curve, and it's use as a default in other packages.
+
+The plot below shows the survival curve for the "pseudo" subject.
 
 ```{r}
 sfit <- survfit(fit)
 plot(sfit, xlab = "Time (years)", ylab = "Survival probability")
 ```
 
-However, if we pass a `newdata` data frame to `survfit`, we obtain a survival curve *for each row* of the data frame. For example:
+Therefore the real power of `survfit.coxph` comes from passing a data frame to the `newdata` argument. If we do so, we obtain a survival curve *for each row* of the data frame. For example:
 
 ```{r}
 sfit <- survfit(fit, newdata = data.frame(age = c(23, 54), nodes = c(0, 5)))
@@ -386,3 +406,10 @@ This object allows to extract the estimated survival probability for any individ
 ```{r}
 summary(sfit[1], times = c(5, 10))
 ```
+
+And, as was the case for formulas, we can have a richer output as a data frame.
+
+```{r}
+summary(sfit, times = c(5, 10), data.frame = TRUE)
+```
+
